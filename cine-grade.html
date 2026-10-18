@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cine Grade</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f4f1ec;--fg:#1b1a18;--mut:#6d675f;--card:#fff;--ac:#c8742b;--bd:#ddd6cb;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e0e10;--fg:#eee9e1;--mut:#9a948a;--card:#18181b;--ac:#e0954a;--bd:#2c2c31;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0e0e10;--fg:#eee9e1;--mut:#9a948a;--card:#18181b;--ac:#e0954a;--bd:#2c2c31;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:720px;margin:0 auto;padding:18px 16px 40px}
+h1{font-size:22px;margin:0 0 2px;letter-spacing:.3px}
+p.s{margin:0 0 14px;color:var(--mut);font-size:14px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:12px}
+canvas{width:100%;max-height:60vh;object-fit:contain;background:#000;border-radius:10px;display:block}
+button,label.b{display:inline-block;background:var(--ac);color:#111;border:0;border-radius:10px;padding:12px 16px;font-weight:600;font-size:15px;font-family:inherit;cursor:pointer;text-align:center}
+button.g,label.b.g{background:transparent;color:var(--fg);border:1px solid var(--bd)}
+button:disabled{opacity:.45}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.row>*{flex:1 1 140px}
+.sl{display:grid;grid-template-columns:96px 1fr 34px;gap:8px;align-items:center;font-size:14px;margin:6px 0}
+.sl input{width:100%;accent-color:var(--ac)}
+.sl span:last-child{color:var(--mut);text-align:right}
+select{width:100%;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--fg);font-size:15px}
+progress{width:100%;height:10px;accent-color:var(--ac)}
+#st{font-size:13px;color:var(--mut);margin-top:8px;min-height:18px}
+label.b{position:relative;overflow:hidden}input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:0}
+</style></head><body><main>
+<h1>Cine Grade</h1>
+<p class="s">Upload a clip, get a cinematic grade, download it. Everything runs on your device, so there is no upload and no size limit.</p>
+
+<div class="card">
+<canvas id="cv" width="640" height="360"></canvas>
+<div class="row">
+<label class="b">Choose video<input id="f" type="file" accept="video/*"></label>
+<button class="g" id="pp" disabled>Play / Pause</button>
+</div>
+</div>
+
+<div class="card" id="ctl"></div>
+
+<div class="card">
+<div style="margin-bottom:10px;font-size:14px">Output size
+<select id="sz"><option value="o">Original resolution</option><option value="1080">Max 1080p (faster, smaller)</option></select></div>
+<button id="ex" disabled style="width:100%">Export graded video</button>
+<progress id="pr" value="0" max="1" style="margin-top:12px"></progress>
+<div id="st">Pick a video to begin.</div>
+<div class="row"><button id="sv" class="g" style="display:none">Save to device</button></div>
+</div>
+
+<p class="s">Export plays the clip once in real time, so a 2 minute clip takes about 2 minutes. Keep this tab open and the screen on until it finishes.</p>
+</main>
+<video id="v" playsinline muted style="display:none"></video>
+<script>
+const $=id=>document.getElementById(id),v=$('v'),cv=$('cv'),st=$('st');
+const S=[['k','Intensity',100,0,100],['w','Warmth',10,-50,50],['c','Contrast',45,0,100],['g','Grain',30,0,100],['vg','Vignette',35,0,100]];
+$('ctl').innerHTML=S.map(s=>`<div class="sl"><span>${s[1]}</span><input type="range" id="s_${s[0]}" min="${s[3]}" max="${s[4]}" value="${s[2]}"><span id="n_${s[0]}">${s[2]}</span></div>`).join('')+`<label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:8px"><input type="checkbox" id="bars" style="accent-color:var(--ac)"> Cinema bars (2.39:1)</label>`;
+S.forEach(s=>$('s_'+s[0]).oninput=e=>$('n_'+s[0]).textContent=e.target.value);
+const val=k=>+$('s_'+k).value;
+
+const gl=cv.getContext('webgl',{preserveDrawingBuffer:true,alpha:false});
+try{const VS='attribute vec2 p;varying vec2 uv;void main(){uv=p*.5+.5;gl_Position=vec4(p,0.,1.);}';
+const FS=`precision highp float;varying vec2 uv;uniform sampler2D t;uniform vec2 res;uniform float tm,k,w,con,gr,vg,bars;
+void main(){
+vec3 o=texture2D(t,uv).rgb,c=o;
+float l=dot(c,vec3(.2126,.7152,.0722));
+float mx=max(c.r,max(c.g,c.b)),mn=min(c.r,min(c.g,c.b)),d=mx-mn,h=0.;
+if(d>.001){if(mx==c.r)h=mod((c.g-c.b)/d,6.);else if(mx==c.g)h=(c.b-c.r)/d+2.;else h=(c.r-c.g)/d+4.;h/=6.;}
+if(h>.9)h-=1.;
+float s=mx>0.?d/mx:0.;
+float sk=smoothstep(-.03,.01,h)*(1.-smoothstep(.1,.15,h))*smoothstep(.1,.25,s)*(1.-smoothstep(.65,.85,s))*smoothstep(.12,.3,l);
+c=mix(c,c*c*(3.-2.*c),con);
+c=mix(c,c*.88,smoothstep(.7,1.,l));
+c=c*.96+vec3(.012,.018,.028);
+float sh=1.-smoothstep(0.,.5,l),hi=smoothstep(.4,1.,l);
+c+=vec3(-.03,.012,.04)*sh*(1.-sk);
+c+=vec3(.05,.02,-.045)*hi*(1.-.5*sk);
+c.r+=w*.04*(1.-.5*sk);c.b-=w*.04*(1.-.5*sk);
+c=mix(vec3(l),c,.9+.1*sk);
+vec2 p=(uv-.5)*1.25;c*=1.-vg*dot(p,p)*1.1;
+float n=fract(sin(dot(uv*res+tm,vec2(12.9898,78.233)))*43758.5453)-.5;
+c+=n*gr*.1*(1.-l*.6);
+c=mix(o,clamp(c,0.,1.),k);
+float vh=res.x/2.39/res.y;
+if(bars>.5&&vh<1.&&abs(uv.y-.5)>vh*.5)c=vec3(0.);
+gl_FragColor=vec4(c,1.);}`;
+function sh(t,s){const x=gl.createShader(t);gl.shaderSource(x,s);gl.compileShader(x);return x}
+const pg=gl.createProgram();gl.attachShader(pg,sh(gl.VERTEX_SHADER,VS));gl.attachShader(pg,sh(gl.FRAGMENT_SHADER,FS));gl.linkProgram(pg);gl.useProgram(pg);
+const bf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,bf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+const ap=gl.getAttribLocation(pg,'p');gl.enableVertexAttribArray(ap);gl.vertexAttribPointer(ap,2,gl.FLOAT,false,0,0);
+const tx=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tx);
+[[gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR],[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE]].forEach(a=>gl.texParameteri(gl.TEXTURE_2D,a[0],a[1]));
+gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+const U=n=>gl.getUniformLocation(pg,n);
+function draw(){
+ if(v.readyState<2)return;
+ try{gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,v)}catch(e){return}
+ gl.viewport(0,0,cv.width,cv.height);
+ gl.uniform2f(U('res'),cv.width,cv.height);
+ gl.uniform1f(U('tm'),(performance.now()/1000%100));
+ gl.uniform1f(U('k'),val('k')/100);gl.uniform1f(U('w'),val('w')/50);
+ gl.uniform1f(U('con'),val('c')/100);gl.uniform1f(U('gr'),val('g')/100);
+ gl.uniform1f(U('vg'),val('vg')/100);gl.uniform1f(U('bars'),$('bars').checked?1:0);
+ gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+}
+(function loop(){draw();requestAnimationFrame(loop)})();
+}catch(e){st.textContent='Graphics error: '+(e.message||e)}
+
+let blob=null,ext='webm',actx,dest,busy=false;
+function size(){
+ const w=v.videoWidth,h=v.videoHeight;if(!w)return;
+ const k=$('sz').value==='1080'?Math.min(1,1920/Math.max(w,h)):1;
+ cv.width=Math.round(w*k/2)*2;cv.height=Math.round(h*k/2)*2;
+}
+$('sz').onchange=size;
+$('f').onchange=e=>{
+ const f=e.target.files[0];if(!f)return;
+ if(v.src)URL.revokeObjectURL(v.src);
+ blob=null;$('sv').style.display='none';
+ v.src=URL.createObjectURL(f);v.muted=true;v.load();
+ st.textContent='Loading…';
+};
+v.onloadedmetadata=()=>{size();$('pp').disabled=false;$('ex').disabled=false;st.textContent='Ready. Tweak the sliders, then export.';v.currentTime=0.05};
+v.onerror=()=>{st.textContent='This browser cannot read that video format.'};
+$('pp').onclick=()=>{v.paused?v.play():v.pause()};
+v.ontimeupdate=()=>{if(v.duration)$('pr').value=v.currentTime/v.duration};
+
+$('ex').onclick=async()=>{
+ if(busy||!v.src)return;busy=true;$('ex').disabled=true;$('pp').disabled=true;$('sv').style.display='none';
+ try{
+  if(!actx){actx=new AudioContext();const src=actx.createMediaElementSource(v);dest=actx.createMediaStreamDestination();src.connect(dest)}
+  await actx.resume();
+  const stream=cv.captureStream(30);
+  dest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
+  const types=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
+  const mt=types.find(t=>MediaRecorder.isTypeSupported(t))||'';
+  ext=mt.includes('mp4')?'mp4':'webm';
+  const bps=Math.max(8e6,Math.min(40e6,cv.width*cv.height*30*.2));
+  const rec=new MediaRecorder(stream,mt?{mimeType:mt,videoBitsPerSecond:bps}:{videoBitsPerSecond:bps});
+  const ch=[];rec.ondataavailable=e=>{if(e.data.size)ch.push(e.data)};
+  rec.onstop=()=>{
+   blob=new Blob(ch,{type:mt||'video/webm'});v.muted=true;busy=false;$('ex').disabled=false;$('pp').disabled=false;$('pr').value=1;
+   st.textContent='Done. '+(blob.size/1048576).toFixed(1)+' MB .'+ext+(ext==='webm'?' (WebM: InShot may not import this. Try Chrome on Android for MP4.)':'');
+   $('sv').style.display='block';
+  };
+  v.pause();v.currentTime=0;
+  await new Promise(r=>{v.onseeked=()=>{v.onseeked=null;r()}});
+  v.muted=false;
+  rec.start(1000);
+  st.textContent='Grading… keep this tab open.';
+  v.onended=()=>{v.onended=null;setTimeout(()=>rec.stop(),400)};
+  await v.play();
+ }catch(err){st.textContent='Export failed: '+(err.message||err);busy=false;$('ex').disabled=false;$('pp').disabled=false;v.muted=true}
+};
+
+$('sv').onclick=async()=>{
+ if(!blob)return;
+ const name='graded-'+Date.now()+'.'+ext;
+ let dl=null;try{dl=window.claude?await claude.use('downloads'):null}catch(e){}
+ if(dl){
+  try{await dl.save({filename:name,data:blob});st.textContent='Saved.'}
+  catch(e){st.textContent=e&&e.code==='declined'?'Save cancelled.':'Save failed ('+(e&&e.code||'error')+').'}
+ }else{
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();
+ }
+};
+</script></body></html>
